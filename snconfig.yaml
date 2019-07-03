@@ -1,0 +1,15 @@
+---
+instances:
+  dev:
+    host: "https://dev75651.service-now.com"
+    default: true
+  prod:
+    host: "https://prod0001.servicenow.com"
+    read_only: true
+
+records:
+  business_rules:
+    table: sys_script
+    key: 'collection/name'
+    fields:
+      script: '.js'
