@@ -1,0 +1,4 @@
+This is a base file
+with a couple of lines
+hello I am a new line
+to demonstrate duplicate edits
