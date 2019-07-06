@@ -110,14 +110,14 @@ def push(ctx, files, instance):
 
 
 @main.command('diff', short_help='Shows difference between local file and Service Now')
-@click.argument('file', type=click.Path(exists=True), required=True)
-@click.argument('instance', required=False)
+@click.argument('files', type=click.Path(exists=True), required=False, nargs=-1)
+@instance_option()
 @pass_sn_context
-def diff(ctx, file, instance):
+def diff(ctx, files, instance):
     instance = instance or ctx.config.default_instance
 
     from snsync.sync import do_diff
-    retval = do_diff(ctx.config, ctx.cache, file, instance)
+    retval = do_diff(ctx.config, ctx.cache, instance, files)
 
     if retval:
         sys.exit(retval)

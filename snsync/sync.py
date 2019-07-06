@@ -89,9 +89,9 @@ def update_meta(client, record, instance):
 
 def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
     """ Attempt to resolve a conflict between local and remote files
-    :param base: The previous contents of the file
-    :param local: The local contents of the file
-    :param remote: The remote contents of a file
+    :param base: A string containing the previous contents of the file
+    :param local: A string containing the local contents of the file
+    :param remote: A string containing the remote contents of a file
     :param confirm: Whether to confirm overwriting a file
     :param prefer: The side to prefer when overwriting
     """
@@ -99,7 +99,7 @@ def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
     results = None
     action = 's'
 
-    if not confirm:
+    if confirm:
         action = click.prompt(
             'Overwrite/Merge/Skip',
             type=click.Choice(['o', 'overwrite', 'm', 'merge', 's', 'skip'], case_sensitive=False),
@@ -110,19 +110,23 @@ def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
         )
         action = action[0]
     if action == 'o':
+        logger.debug("Overwriting with {} copy".format(prefer))
         if prefer == 'local':
             results = local
         elif prefer == 'remote':
             results = remote
     elif action == 'm':
-        had_conflict, contents = merge3_has_conflict(local, base, remote)
+        had_conflict, contents = merge3_has_conflict(
+            local.splitlines(True), base.splitlines(True), remote.splitlines(True))
         contents = ''.join(contents)
 
         if had_conflict:
-            return None
-            pass  # We should prompt for an editor here, else skip
+            logger.debug("File has a conflict")
+            contents = click.edit(text=contents, require_save=True)
 
-    elif confirm or action == 's':
+        return contents
+
+    elif not confirm or action == 's':
         return None
 
     return results
@@ -140,55 +144,37 @@ def do_pull(config, cache, instance, files=None, confirm=True):
     for record in cache.get_records(files=files):
         update_meta(client, record, instance)
         # Compare any files that match the files passed in
-        for field_name, file, status in record.compare(instance, files=files):
-            field = record.get_sn_field(instance, field_name)
-            prev_field = record.get_prev_sn_field(instance, field_name)
+        for name, field, file, status in record.compare(instance, files=files):
+            # If the file has not been modified, we can continue
+            if status == ModStatus.NOCHANGE:
+                logger.debug("File not modified - not saving")
+                continue
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.LOCAL or status == ModStatus.BOTH:
                 contents = resolve_conflict(
-                    prev_field['contents'], file.contents(), field['contents'])
-                if contents is not None:
-                    pass
-                    # file.save(contents)
+                    field['prev_contents'], file.contents, field['contents'], prefer='remote')
+                # If this file was skipped or something went wrong
+                if contents is None:
+                    logger.warn("Skipping file: {}".format(file))
+                    continue
             # Else we can just overwrite the local content
             elif status == ModStatus.REMOTE:
-                pass
-                # file.save(field['contents'])
+                logger.debug("File modified remotely - updating")
+                contents = field['contents']
+
+            # Now save the file
+            file.save(contents)
+            record.update_field_meta(instance, name)
 
         record.save()
 
-    """ Updates local files with contents from Service Now """
-
-    client = setup_client(config, instance)
-
-    for record in cache.get_records(file=file):
-        # Update the metadata for a file
-        logger.debug("Fetching meta for {}/{}".format(record.rtype, record.key))
-        resp = client.get(record.table, query=record.keys, limit=1)
-        record.update_meta(instance, resp['records'][0])
-
-        # Check if the file has been updated
-        modified_files = record.get_modified(instance, file)
-
-        for status in modified_files:
-            logger.debug("{} Modified locally: {} remotely: {}".format(
-                status['name'], status['local'], status['remote']))
-
-            # If it has been modified remotely, but not locally update the content
-            if not status['local'] and status['remote']:
-                pass
-            # If it has been modified locally, prompt to overwrite the content
-            elif status['local']:
-                logger.info("{} has been modified locally".format(status['name']))
-                if not confirm or click.confirm("Overwrite local file"):
-                    with open(status['local_path'], 'w') as outfile:
-                        outfile.write(record.meta[instance]['fields'][status['name']]['contents'])
-            # Else, do nothing
-            else:
-                pass
-
 
 def get_status(config, cache, instance):
+    """ Print differences between local files and remote files
+    :param config: SNConfig object
+    :param cache: SNCache Object
+    :param instance: Instance to compare
+    """
 
     client = setup_client(config, instance)
 
@@ -196,28 +182,26 @@ def get_status(config, cache, instance):
     remote = []
     both = []
 
-    # Update the cache
     for record in cache.get_records():
-        logger.debug("Fetching meta for {}/{}".format(record.rtype, record.key))
-        resp = client.get(record.table, query=record.keys, limit=1)
-        record.update_meta(instance, resp['records'][0])
-
-        # Get all modified
-        modified_files = record.get_modified(instance)
-
-        for status in modified_files:
-            if not status['local'] and status['remote']:
+        update_meta(client, record, instance)
+        # Compare any files that match the files passed in
+        for name, field, file, status in record.compare(instance):
+            if status == ModStatus.NOCHANGE:
+                continue
+            elif status == ModStatus.LOCAL:
+                local.append(file.relative_path)
+            elif status == ModStatus.REMOTE:
                 remote.append("{} (by {} at {})".format(
-                    status['local_path'],
+                    file.relative_path,
                     record.meta[instance]['updated_by'],
-                    record.meta[instance]['updated_on']))
-            elif status['local'] and not status['remote']:
-                local.append(status['local_path'])
-            elif status['local'] and status['remote']:
+                    record.meta[instance]['updated_on']
+                ))
+            elif status == ModStatus.BOTH:
                 both.append("{} (by {} at {})".format(
-                    status['local_path'],
+                    file.relative_path,
                     record.meta[instance]['updated_by'],
-                    record.meta[instance]['updated_on']))
+                    record.meta[instance]['updated_on']
+                ))
 
     # Display the results
     if local or remote or both:
@@ -241,26 +225,36 @@ def get_status(config, cache, instance):
         click.echo("No files modified")
 
 
-def do_diff(config, cache, file, instance):
+def do_diff(config, cache, instance, files=None):
+    """ Show diffs between local and remote files
+    :param config: SNConfig object
+    :param cache: SNCache Object
+    :param instance: Instance to compare
+    :param files: List of local files to compare
+    """
     client = setup_client(config, instance)
 
-    for record in cache.get_records(file=file):
+    diffs = []
 
-        logger.debug("Fetching meta for {}/{}".format(record.rtype, record.key))
-        resp = client.get(record.table, query=record.keys, limit=1)
-        record.update_meta(instance, resp['records'][0])
+    for record in cache.get_records(files=files):
+        update_meta(client, record, instance)
+        for name, file in record.get_files(files=files):
+            field = record.meta[instance]['fields'][name]
+            diff = difflib.unified_diff(
+                field['contents'].splitlines(True),
+                file.contents.splitlines(True),
+                fromfile='remote',
+                tofile='local'
+            )
+            diff = ''.join(diff)
+            if diff:
+                diffs.append('{}:\n{}\n'.format(file.relative_path, diff))
 
-        field = record.get_file_field(file)
-
-        with open(file, 'rb') as file:
-            local = file.read()
-
-        local = local.decode().splitlines(True)
-        remote = record.meta[instance]['fields'][field]['contents'].splitlines(True)
-
-        diff = difflib.unified_diff(local, remote, fromfile='local', tofile='remote')
-
-    click.echo_via_pager(''.join(diff))
+    # Display the results
+    if diffs:
+        click.echo_via_pager(''.join(diffs))
+    else:
+        click.echo("No files modified")
 
 
 def do_push(config, cache, instance, files=None):
@@ -272,66 +266,35 @@ def do_push(config, cache, instance, files=None):
     :param files: List of files to push to Service Now
     :returns: 0 on success, 1 on failure
     """
-
-    # Setup the client for this particular instance
     client = setup_client(config, instance)
 
-    # Get all records that relate to the local files
     for record in cache.get_records(files=files):
         update_meta(client, record, instance)
+        for name, field, file, status in record.compare(instance, files=files):
+            # If the file has not been modified, we can continue
+            if status == ModStatus.NOCHANGE:
+                logger.debug("File not modified - not saving")
+                continue
+            # For files that have been modified, we need to either merge or overwrite the file
+            if status == ModStatus.REMOTE or status == ModStatus.BOTH:
+                contents = resolve_conflict(
+                    field['prev_contents'], file.contents, field['contents'], prefer='local')
+                # If this file was skipped or something went wrong
+                if contents is None:
+                    logger.warn("Skipping file: {}".format(file))
+                    continue
+            # Else we can just overwrite the remote content
+            elif status == ModStatus.LOCAL:
+                logger.debug("File modified locally - updating")
+                contents = file.contents
 
-        from pprint import pprint
-        for file, status in record.compare(instance, files=files):
-            logger.debug("{}: {}".format(file, status))
+            # Now save the file
+            file.save(contents)
+            resp = client.update(record.table, record.get_sys_id(instance), {
+                name: contents
+            })
+            update_meta(client, record, instance)
+            record.update_field_meta(instance, name)
 
-    #     for file in record.local_files
-
-
-    #     # Go through the
-    #     for field, lfile in record.local_files:
-    #         if not lfile.is_same()
-
-
-
-
-
-
-
-
-
-
-
-    # for record in cache.get_records()
-
-
-    # for record in cache.get_records(file=file):
-    #     # Update the metadata for a file
-    #     logger.debug("Fetching meta for {}/{}".format(record.rtype, record.key))
-    #     resp = client.get(record.table, query=record.keys, limit=1)
-    #     record.update_meta(instance, resp['records'][0])
-
-    #     # Check if the file has been updated
-    #     modified_files = record.get_modified(instance, file)
-
-    #     fields = {}
-
-    #     for status in modified_files:
-    #         logger.debug("{} Modified locally: {} remotely: {}".format(
-    #             status['name'], status['local'], status['remote']))
-
-    #         # If only local changes, we can push it
-    #         if status['local'] and not status['remote']:
-    #             fields[status['name']] =
-    #         # If only remote changes, prompt for overwrite
-    #         elif not status['local'] and status['remote']:
-    #             pass
-    #         # If Both, must be pulled first
-    #         elif not status['local'] and status['remote']:
-    #             pass
-    #         # If no changes no action
-
-    #     # Push changes for this record
-
-
-
+        record.save()
 

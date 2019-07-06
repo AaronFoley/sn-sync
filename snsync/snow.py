@@ -65,5 +65,26 @@ class SNClient(object):
     def create(self, table, values):
         pass
 
-    def save(self, table, sys_id, values):
-        pass
+    def update(self, table, sys_id, values):
+        """ Updates a record within Service Now
+        :param table: Name of the table within Service Now
+        :param sys_id: sys_id of the record
+        :param values: dict containing the fields to update
+        """
+
+        params = {
+            'displayvalue': True,
+            'sysparm_query': 'sys_id={}'.format(sys_id),
+            'sysparm_action': 'update'
+        }
+
+        resp = self._session.post(
+            "{host}/{table}.do?JSONv2".format(host=self.host, table=table),
+            params=params,
+            json=values
+        )
+
+        logger.debug("Requested: {}".format(resp.url))
+
+        resp.raise_for_status()
+        return resp.json()

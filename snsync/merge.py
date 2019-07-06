@@ -40,6 +40,7 @@ def merge3_has_conflict(mine, base, your, reprocess=False):
             results.append(mid_marker + newline)
             results.extend(your[t[1]:t[2]])
             results.append(end_marker + newline)
+            had_conflict = True
         else:
             raise ValueError(what)
 

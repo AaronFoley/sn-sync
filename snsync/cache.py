@@ -26,7 +26,7 @@ class LocalFile(object):
 
     @property
     def contents(self):
-        return self._path.read_text()
+        return self._path.read_bytes().decode()
 
     @property
     def hash(self):
@@ -36,6 +36,10 @@ class LocalFile(object):
     def mtime(self):
         datetime.fromtimestamp(self._path.stat().st_mtime)
 
+    @property
+    def relative_path(self):
+        return self._path.relative_to(Path.cwd())
+
     def samefile(self, file_path):
         return self._path.samefile(file_path)
 
@@ -43,7 +47,8 @@ class LocalFile(object):
         return self._path.stats()
 
     def save(self, contents):
-        pass
+        logger.debug("Saving file: {}".format(self._path))
+        self._path.write_text(contents)
 
     def __str__(self):
         return str(self._path)
@@ -65,8 +70,6 @@ class SNRecord(object):
         self.lfile_field_map = {}
         # Contains the metadata key by Service Now Instances
         self.meta = meta or {}
-        # Contains the previous;y known meta data for service now instances
-        self.prev_meta = {}
         # File has not been saved if we have not passed in Meta
         self._new = (meta is not None)
 
@@ -78,7 +81,10 @@ class SNRecord(object):
     def file(self):
         """ The file this record should be saved too """
         folders = self.name.split(os.sep)
-        return os.path.join(self.cache.path, *folders[:-1], folders[-1] + '.json')
+        return os.path.join(self.cache.path, self.record_type, *folders[:-1], folders[-1] + '.json')
+
+    def get_sys_id(self, instance):
+        return self.meta[instance]['sys_id']
 
     def get_sn_keys(self):
         """ Get the fields and their values to look this record up in Service Now """
@@ -93,16 +99,6 @@ class SNRecord(object):
         """
         try:
             return self.meta[instance]['fields'][field]
-        except KeyError:
-            return None
-
-    def get_prev_sn_field(self, instance, field):
-        """ Get the meta for a field on a particular instance
-        :param instance: Instance to check
-        :param field: field to check
-        """
-        try:
-            return self.prev_meta[instance]['fields'][field]
         except KeyError:
             return None
 
@@ -135,6 +131,24 @@ class SNRecord(object):
                 return field
         return None
 
+    def get_files(self, files=None):
+        """ Get a list of LocalFiles this record contains
+        :param files: List of files to filter by
+        :returns: A list of tuples contain field, file values
+        """
+
+        files = []
+
+        for field, file in self.lfile_field_map.items():
+            if files is not None:
+                for file_path in files:
+                    if not contains_file(file_path):
+                        continue
+
+            files.append((field, file))
+
+        return files
+
     def contains_file(self, file_path):
         """ Checks to see if this record is responsible for a local file
         :param file_path: path to a local file
@@ -148,22 +162,40 @@ class SNRecord(object):
         :param meta: Dict containing information on the record in Service Now
         """
 
-        # Copy old meta to prev
-        if instance in self.meta:
-            self.prev_meta[instance] = copy.deepcopy(self.meta[instance])
+        if not self.meta[instance]:
+            self.meta[instance] = {}
 
-        self.meta[instance] = {
-            'sys_id': meta['sys_id'],
-            'updated_on': meta['sys_updated_on'],
-            'updated_by': meta['sys_updated_by'],
-            'fields': {}
-        }
+        self.meta[instance]['sys_id'] = meta['sys_id']
+        self.meta[instance]['updated_on'] = meta['sys_updated_on']
+        self.meta[instance]['updated_by'] = meta['sys_updated_by']
 
+        if 'fields' not in self.meta[instance]:
+            self.meta[instance]['fields'] = {}
+
+        # Update the fields
         for name in self.config['fields'].keys():
-            self.meta[instance]['fields'][name] = {
-                'hash': hashlib.md5(meta[name].encode()).hexdigest(),
-                'contents': meta[name]
-            }
+            if name not in self.meta[instance]['fields']:
+                self.meta[instance]['fields'][name] = {}
+
+            cfield = self.meta[instance]['fields'].get(name, {})
+            chash = cfield.get('hash', None)
+            phash = cfield.get('prev_hash', None)
+            rhash = hashlib.md5(meta[name].encode()).hexdigest()
+
+            # If we don't have a phash and the hash has changed save it
+            if phash is None and chash != rhash:
+                self.meta[instance]['fields'][name]['prev_hash'] = chash
+                self.meta[instance]['fields'][name]['prev_contents'] = cfield['contents']
+
+            self.meta[instance]['fields'][name]['hash'] = rhash
+            self.meta[instance]['fields'][name]['contents'] = meta[name]
+
+    def update_field_meta(self, instance, name):
+        """ Updates the previous hash for a field """
+        logger.debug("Updating previous values on instance {} field {}".format(instance, name))
+        field = self.meta[instance]['fields'][name]
+        self.meta[instance]['fields'][name]['prev_hash'] = field['hash']
+        self.meta[instance]['fields'][name]['prev_contents'] = field['contents']
 
     def save(self):
         """ Saves the file to the local cache directory """
@@ -197,21 +229,20 @@ class SNRecord(object):
 
         comparison = []
 
-        for field, lfile in check_fields.items():
+        for name, lfile in check_fields.items():
+            field = self.meta[instance]['fields'][name]
+
             # Get the different hashes
             local_hash = lfile.hash
-            remote_hash = self.meta[instance]['fields'][field]['hash']
+            remote_hash = field['hash']
             try:
-                prev_remote_hash = self.prev_meta[instance]['fields'][field]['hash']
+                prev_remote_hash = field['prev_hash']
             except KeyError:
                 prev_remote_hash = None
 
-            # TEMP
-            # TODO: Remove
-            from pprint import pprint
-            pprint(local_hash)
-            pprint(remote_hash)
-            pprint(prev_remote_hash)
+            logger.debug("Local:\t" + local_hash)
+            logger.debug("Remote:\t" + remote_hash)
+            logger.debug("Prev:\t" + str(prev_remote_hash))
 
             # There can be 4 different cases when comparing a file:
             # 1. There are no changes local hash
@@ -222,23 +253,23 @@ class SNRecord(object):
             # Case 1: No Changes
             # Local and Remote hashes line up
             if local_hash == remote_hash:
-                comparison.append((field, lfile, ModStatus.NOCHANGE))
+                comparison.append((name, field, lfile, ModStatus.NOCHANGE))
 
             # Case 2: Remote Changes
             # Local and Remote conflict, but the local lines up with our previous hash
             elif local_hash != remote_hash and \
                     (prev_remote_hash is None or local_hash == prev_remote_hash):
-                comparison.append((field, lfile, ModStatus.REMOTE))
+                comparison.append((name, field, lfile, ModStatus.REMOTE))
 
             # Case 3: Local Changes
             # Local and Remote Conflict, but prev hash and remote hash match
             elif local_hash != remote_hash and remote_hash == prev_remote_hash:
-                comparison.append((field, lfile, ModStatus.LOCAL))
+                comparison.append((name, field, lfile, ModStatus.LOCAL))
 
             # Case 4: Local and Remote Changes
             # No hashes match
             elif local_hash != remote_hash != prev_remote_hash:
-                comparison.append((field, lfile, ModStatus.BOTH))
+                comparison.append((name, field, lfile, ModStatus.BOTH))
 
         return comparison
 
