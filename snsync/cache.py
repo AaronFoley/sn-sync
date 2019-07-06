@@ -96,6 +96,16 @@ class SNRecord(object):
         except KeyError:
             return None
 
+    def get_prev_sn_field(self, instance, field):
+        """ Get the meta for a field on a particular instance
+        :param instance: Instance to check
+        :param field: field to check
+        """
+        try:
+            return self.prev_meta[instance]['fields'][field]
+        except KeyError:
+            return None
+
     def add_lfile(self, file, file_ext):
         """ Adds a local file to the map
         :param file: path to the local file

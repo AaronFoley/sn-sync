@@ -1,3 +1,0 @@
-This is a base file
-with a couple of lines
-to demonstrate duplicate edits

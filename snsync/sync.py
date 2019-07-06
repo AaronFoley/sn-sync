@@ -2,10 +2,11 @@ import click
 import logging
 import keyring
 import difflib
-from pathlib import Path
 from requests.exceptions import HTTPError
+from snsync.exceptions import LoginFailed
 from snsync.cache import ModStatus
 from snsync.snow import SNClient
+from snsync.merge import merge3_has_conflict
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +59,10 @@ def setup_client(config, instance):
     for x in range(3):
         username, password = prompt_for_auth_details(instance)
         client = SNClient(inst_config['host'],
-            username=username,
-            password=password,
-            verify=inst_config['verify_ssl'],
-            read_only=inst_config['read_only'])
+                          username=username,
+                          password=password,
+                          verify=inst_config['verify_ssl'],
+                          read_only=inst_config['read_only'])
         try:
             # Attempt a simple get to confirm that authentication is working
             client.get('invalid_table')
@@ -86,6 +87,47 @@ def update_meta(client, record, instance):
     record.update(instance, resp['records'][0])
 
 
+def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
+    """ Attempt to resolve a conflict between local and remote files
+    :param base: The previous contents of the file
+    :param local: The local contents of the file
+    :param remote: The remote contents of a file
+    :param confirm: Whether to confirm overwriting a file
+    :param prefer: The side to prefer when overwriting
+    """
+
+    results = None
+    action = 's'
+
+    if not confirm:
+        action = click.prompt(
+            'Overwrite/Merge/Skip',
+            type=click.Choice(['o', 'overwrite', 'm', 'merge', 's', 'skip'], case_sensitive=False),
+            show_choices=False,
+            show_default=False,
+            prompt_suffix=' [o/m/S]: ',
+            default='s'
+        )
+        action = action[0]
+    if action == 'o':
+        if prefer == 'local':
+            results = local
+        elif prefer == 'remote':
+            results = remote
+    elif action == 'm':
+        had_conflict, contents = merge3_has_conflict(local, base, remote)
+        contents = ''.join(contents)
+
+        if had_conflict:
+            return None
+            pass  # We should prompt for an editor here, else skip
+
+    elif confirm or action == 's':
+        return None
+
+    return results
+
+
 def do_pull(config, cache, instance, files=None, confirm=True):
     """ Pull down update from Service Now, updating local files
     :param config: SNConfig object
@@ -99,32 +141,19 @@ def do_pull(config, cache, instance, files=None, confirm=True):
         update_meta(client, record, instance)
         # Compare any files that match the files passed in
         for field_name, file, status in record.compare(instance, files=files):
-            field = record.get_sn_field(field_name)
+            field = record.get_sn_field(instance, field_name)
+            prev_field = record.get_prev_sn_field(instance, field_name)
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.LOCAL or status == ModStatus.BOTH:
-                contents = None
-                if not confirm:
-                    action = click.prompt(
-                        'Overwrite/Merge/Skip',
-                        type=click.Choice(['o', 'overwrite', 'm', 'merge', 's', 'skip'], case_sensitive=False),
-                        show_choices=False,
-                        show_default=False,
-                        prompt_suffix=' [o/m/S]: ',
-                        default='s'
-                    )
-                    action = action[0]
-                if action == 'o':
-                    contents = field['contents']
-                elif action == 'm':
-                    #contents = merge()
+                contents = resolve_conflict(
+                    prev_field['contents'], file.contents(), field['contents'])
+                if contents is not None:
                     pass
-                elif confirm or action == 's':
-                    continue
-                #file.save(contents)
+                    # file.save(contents)
             # Else we can just overwrite the local content
             elif status == ModStatus.REMOTE:
                 pass
-                #file.save(field['contents'])
+                # file.save(field['contents'])
 
         record.save()
 
