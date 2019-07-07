@@ -83,11 +83,9 @@ def pull(ctx, files, instance):
 
 @main.command('status', short_help='Shows changes in local repo')
 @click.argument('instance', required=False)
+@instance_option()
 @pass_sn_context
 def status(ctx, instance):
-
-    instance = instance or ctx.config.default_instance
-
     from snsync.sync import get_status
     retval = get_status(ctx.config, ctx.cache, instance)
 
@@ -114,8 +112,6 @@ def push(ctx, files, instance):
 @instance_option()
 @pass_sn_context
 def diff(ctx, files, instance):
-    instance = instance or ctx.config.default_instance
-
     from snsync.sync import do_diff
     retval = do_diff(ctx.config, ctx.cache, instance, files)
 
@@ -123,7 +119,12 @@ def diff(ctx, files, instance):
         sys.exit(retval)
 
 
-@main.command('sync', short_help='Watches for changes and syncs them with Service Now')
+@main.command('watch', short_help='Watches for local changes and syncs them with Service Now')
+@instance_option()
 @pass_sn_context
-def sync(ctx):
-    click.echo("Hello World!")
+def watch(ctx, instance):
+    from snsync.sync import do_watch
+    retval = do_watch(ctx.config, ctx.cache, instance)
+
+    if retval:
+        sys.exit(retval)

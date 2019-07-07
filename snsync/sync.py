@@ -2,7 +2,11 @@ import click
 import logging
 import keyring
 import difflib
+import time
+from pathlib import Path
 from requests.exceptions import HTTPError
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 from snsync.exceptions import LoginFailed
 from snsync.cache import ModStatus
 from snsync.snow import SNClient
@@ -298,3 +302,82 @@ def do_push(config, cache, instance, files=None):
 
         record.save()
 
+
+class SNSyncHandler(FileSystemEventHandler):
+    """ Watches the filesystem for changes to be sent up to service now """
+
+    def __init__(self, config, cache, instance, client):
+        self._config = config
+        self._cache = cache
+        self._instance = instance
+        self._client = client
+
+    def dispatch(self, event):
+        if event.is_directory:
+            return
+        super().dispatch(event)
+
+    def on_modified(self, event):
+        """ Triggered when a file is modified """
+        for record in self._cache.get_records(files=[event.src_path]):
+            update_meta(self._client, record, self._instance)
+            for name, field, file, status in record.compare(self._instance, files=[event.src_path]):
+                if status == ModStatus.NOCHANGE:
+                    logger.debug("File not modified - not saving")
+                    continue
+                # For files that have been modified, we need to either merge or overwrite the file
+                if status == ModStatus.REMOTE or status == ModStatus.BOTH:
+                    contents = resolve_conflict(
+                        field['prev_contents'], file.contents, field['contents'], prefer='local')
+                    # If this file was skipped or something went wrong
+                    if contents is None:
+                        logger.warn("Skipping file: {}".format(file))
+                        continue
+                # Else we can just overwrite the remote content
+                elif status == ModStatus.LOCAL:
+                    logger.debug("File modified locally - updating")
+                    contents = file.contents
+
+                # Now save the file
+                file.save(contents)
+                resp = self._client.update(record.table, record.get_sys_id(self._instance), {
+                    name: contents
+                })
+                update_meta(self._client, record, self._instance)
+                record.update_field_meta(self._instance, name)
+
+            record.save()
+
+
+def do_watch(config, cache, instance):
+    """ Watch the local folders """
+    client = setup_client(config, instance)
+
+    # Update all records
+    for record in cache.get_records():
+        update_meta(client, record, instance)
+
+    event_handler = SNSyncHandler(config, cache, instance, client)
+    observer = Observer()
+
+    watching = False
+
+    for record_type in config.records.keys():
+        path = Path('.', record_type)
+        if path.is_dir():
+            watching = True
+            logger.debug("Watching {}".format(path))
+            observer.schedule(event_handler, path=str(path), recursive=True)
+
+    if not watching:
+        logger.error("No directories found to watch")
+        return 1
+
+    observer.start()
+
+    try:
+        while True:
+          time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()

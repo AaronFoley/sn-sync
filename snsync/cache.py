@@ -162,7 +162,7 @@ class SNRecord(object):
         :param meta: Dict containing information on the record in Service Now
         """
 
-        if not self.meta[instance]:
+        if not self.meta.get(instance):
             self.meta[instance] = {}
 
         self.meta[instance]['sys_id'] = meta['sys_id']
@@ -185,7 +185,7 @@ class SNRecord(object):
             # If we don't have a phash and the hash has changed save it
             if phash is None and chash != rhash:
                 self.meta[instance]['fields'][name]['prev_hash'] = chash
-                self.meta[instance]['fields'][name]['prev_contents'] = cfield['contents']
+                self.meta[instance]['fields'][name]['prev_contents'] = cfield.get('contents', None)
 
             self.meta[instance]['fields'][name]['hash'] = rhash
             self.meta[instance]['fields'][name]['contents'] = meta[name]
