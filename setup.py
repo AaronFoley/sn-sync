@@ -5,7 +5,10 @@ install_requires = [
     'requests>=2.22',
     'merge3==0.0.2',
     'click>=7.0',
-    'keyring>=19.0.2'
+    'keyring>=19.0.2',
+    'secretstorage>=3.1.1; platform_system=="Linux"',
+    'py-notifier>=0.1.0',
+    'win10toast >= 0.9; platform_system=="Windows"',
 ]
 
 with open('README.md') as fh:

@@ -7,6 +7,7 @@ from pathlib import Path
 from requests.exceptions import HTTPError
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from pynotifier import Notification
 from snsync.exceptions import LoginFailed
 from snsync.cache import ModStatus
 from snsync.snow import SNClient
@@ -91,19 +92,28 @@ def update_meta(client, record, instance):
     record.update(instance, resp['records'][0])
 
 
-def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
+def resolve_conflict(path, base, local, remote, confirm=True, prefer='local', notifications=False):
     """ Attempt to resolve a conflict between local and remote files
     :param base: A string containing the previous contents of the file
     :param local: A string containing the local contents of the file
     :param remote: A string containing the remote contents of a file
     :param confirm: Whether to confirm overwriting a file
     :param prefer: The side to prefer when overwriting
+    :param notifications: Send notifications
     """
 
     results = None
     action = 's'
 
     if confirm:
+
+        Notification(
+            title='SN Sync: Conflict when syncing file',
+            description=path,
+            duration=5,
+            urgency=Notification.URGENCY_CRITICAL
+        ).send()
+
         action = click.prompt(
             'Overwrite/Merge/Skip',
             type=click.Choice(['o', 'overwrite', 'm', 'merge', 's', 'skip'], case_sensitive=False),
@@ -112,6 +122,7 @@ def resolve_conflict(base, local, remote, confirm=True, prefer='local'):
             prompt_suffix=' [o/m/S]: ',
             default='s'
         )
+
         action = action[0]
     if action == 'o':
         logger.debug("Overwriting with {} copy".format(prefer))
@@ -156,7 +167,7 @@ def do_pull(config, cache, instance, files=None, confirm=True):
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.LOCAL or status == ModStatus.BOTH:
                 contents = resolve_conflict(
-                    field['prev_contents'], file.contents, field['contents'], prefer='remote')
+                    str(file.relative_path), field['prev_contents'], file.contents, field['contents'], prefer='remote')
                 # If this file was skipped or something went wrong
                 if contents is None:
                     logger.warn("Skipping file: {}".format(file))
@@ -282,7 +293,7 @@ def do_push(config, cache, instance, files=None):
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.REMOTE or status == ModStatus.BOTH:
                 contents = resolve_conflict(
-                    field['prev_contents'], file.contents, field['contents'], prefer='local')
+                    str(file.relative_path), field['prev_contents'], file.contents, field['contents'], prefer='local')
                 # If this file was skipped or something went wrong
                 if contents is None:
                     logger.warn("Skipping file: {}".format(file))
@@ -312,6 +323,8 @@ class SNSyncHandler(FileSystemEventHandler):
         self._instance = instance
         self._client = client
 
+        self._ignored = []
+
     def dispatch(self, event):
         if event.is_directory:
             return
@@ -319,6 +332,12 @@ class SNSyncHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         """ Triggered when a file is modified """
+
+        # If we have just processed this file, ignore it once
+        if (event.src_path in self._ignored):
+            self._ignored.remove(event.src_path)
+            return
+
         for record in self._cache.get_records(files=[event.src_path]):
             update_meta(self._client, record, self._instance)
             for name, field, file, status in record.compare(self._instance, files=[event.src_path]):
@@ -328,7 +347,8 @@ class SNSyncHandler(FileSystemEventHandler):
                 # For files that have been modified, we need to either merge or overwrite the file
                 if status == ModStatus.REMOTE or status == ModStatus.BOTH:
                     contents = resolve_conflict(
-                        field['prev_contents'], file.contents, field['contents'], prefer='local')
+                        str(file.relative_path), field['prev_contents'], file.contents, field['contents'],
+                        prefer='local', notifications=True)
                     # If this file was skipped or something went wrong
                     if contents is None:
                         logger.warn("Skipping file: {}".format(file))
@@ -340,6 +360,10 @@ class SNSyncHandler(FileSystemEventHandler):
 
                 # Now save the file
                 file.save(contents)
+
+                # Temporarily add this file to the ignore list
+                self._ignored.append(event.src_path)
+
                 resp = self._client.update(record.table, record.get_sys_id(self._instance), {
                     name: contents
                 })
