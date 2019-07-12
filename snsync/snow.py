@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 class SNClient(object):
     """ Very simple Service now client """
 
-    def __init__(self, host, username=None, password=None, headers=None, verify=True, read_only=False):
+    def __init__(self, host, username=None, password=None,
+                 headers=None, verify=True, read_only=False):
         self.host = host
 
         self._session = requests.Session()
@@ -48,7 +49,7 @@ class SNClient(object):
         }
 
         if query:
-             params['sysparm_query'] = self.format_query(query)
+            params['sysparm_query'] = self.format_query(query)
 
         if limit:
             params['sysparm_limit'] = limit

@@ -33,13 +33,14 @@ def instance_option(*param_decls, **attrs):
                 return snctx.config.default_instance
 
             # Ensure that the instance name passed is in the configuration
-            if not value in snctx.config.instances:
+            if value not in snctx.config.instances:
                 raise InstanceNotFound("Unable to find instance {} in configuration".format(value))
             return value
 
         attrs.setdefault('callback', callback)
-        attrs.setdefault('help', 'The Service Now Instances to interact with as it appears in config')
-        return click.option(*(param_decls or ('--instance','-i',)), **attrs)(f)
+        attrs.setdefault('help', 'The Service Now Instances to '
+                         'interact with as it appears in config')
+        return click.option(*(param_decls or ('--instance', '-i',)), **attrs)(f)
 
     return decorator
 
@@ -70,7 +71,7 @@ def main(ctx, verbosity):
 
 
 @main.command('pull', short_help='Updates local files to match what is in Service Now')
-@click.argument('files', type=click.Path(exists=True), required=False, nargs=-1)
+@click.argument('files', type=click.Path(exists=False), required=False, nargs=-1)
 @instance_option()
 @pass_sn_context
 def pull(ctx, files, instance):
@@ -93,9 +94,7 @@ def status(ctx, instance):
         sys.exit(retval)
 
 
-@main.command('push', short_help='Push local changes to Service Now',
-    context_settings=dict(ignore_unknown_options=True,)
-)
+@main.command('push', short_help='Push local changes to Service Now')
 @click.argument('files', type=click.Path(exists=True), required=False, nargs=-1)
 @instance_option()
 @pass_sn_context

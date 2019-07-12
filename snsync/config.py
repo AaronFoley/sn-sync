@@ -67,7 +67,7 @@ class SNConfig(object):
             except yaml.YAMLError as exc:
                 raise InvalidConfiguration(
                     'Unable to parse YAML file {}. Error: {}'
-                    ''.format(config_path, e)
+                    ''.format(config_file, exc)
                 ) from exc
 
         self._config['config_file'] = config_file
@@ -105,7 +105,6 @@ class SNConfig(object):
                 raise InvalidConfiguration(
                     'Record {} missing required fields: {}'.format(
                         name, ','.join(RECORD_REQUIRED_FIELDS)))
-
 
     def __getattr__(self, name):
         return self._config[name]

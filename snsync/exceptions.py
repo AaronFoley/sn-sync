@@ -21,6 +21,7 @@ class InstanceNotFound(SNSyncException):
     """ Raised when an instance is not found """
     pass
 
+
 class LoginFailed(SNSyncException):
     """ Raised when we are not able to authenticate to an instance """
     pass

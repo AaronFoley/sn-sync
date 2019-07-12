@@ -3,7 +3,6 @@ import logging
 import os
 import json
 import hashlib
-import copy
 from enum import Enum
 from pathlib import Path
 from datetime import datetime
@@ -142,7 +141,7 @@ class SNRecord(object):
         for field, file in self.lfile_field_map.items():
             if files is not None:
                 for file_path in files:
-                    if not contains_file(file_path):
+                    if not self.contains_file(file_path):
                         continue
 
             files.append((field, file))

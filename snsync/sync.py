@@ -167,7 +167,11 @@ def do_pull(config, cache, instance, files=None, confirm=True):
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.LOCAL or status == ModStatus.BOTH:
                 contents = resolve_conflict(
-                    str(file.relative_path), field['prev_contents'], file.contents, field['contents'], prefer='remote')
+                    str(file.relative_path),
+                    field['prev_contents'],
+                    file.contents,
+                    field['contents'],
+                    prefer='remote')
                 # If this file was skipped or something went wrong
                 if contents is None:
                     logger.warn("Skipping file: {}".format(file))
@@ -293,7 +297,11 @@ def do_push(config, cache, instance, files=None):
             # For files that have been modified, we need to either merge or overwrite the file
             if status == ModStatus.REMOTE or status == ModStatus.BOTH:
                 contents = resolve_conflict(
-                    str(file.relative_path), field['prev_contents'], file.contents, field['contents'], prefer='local')
+                    str(file.relative_path),
+                    field['prev_contents'],
+                    file.contents,
+                    field['contents'],
+                    prefer='local')
                 # If this file was skipped or something went wrong
                 if contents is None:
                     logger.warn("Skipping file: {}".format(file))
@@ -347,7 +355,10 @@ class SNSyncHandler(FileSystemEventHandler):
                 # For files that have been modified, we need to either merge or overwrite the file
                 if status == ModStatus.REMOTE or status == ModStatus.BOTH:
                     contents = resolve_conflict(
-                        str(file.relative_path), field['prev_contents'], file.contents, field['contents'],
+                        str(file.relative_path),
+                        field['prev_contents'],
+                        file.contents,
+                        field['contents'],
                         prefer='local', notifications=True)
                     # If this file was skipped or something went wrong
                     if contents is None:
@@ -401,7 +412,7 @@ def do_watch(config, cache, instance):
 
     try:
         while True:
-          time.sleep(1)
+            time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
     observer.join()

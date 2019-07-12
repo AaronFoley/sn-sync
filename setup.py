@@ -6,6 +6,8 @@ install_requires = [
     'merge3==0.0.2',
     'click>=7.0',
     'keyring>=19.0.2',
+    'pyyaml>=5',
+    'watchdog>=0.9.0',
     'secretstorage>=3.1.1; platform_system=="Linux"',
     'py-notifier>=0.1.0',
     'win10toast >= 0.9; platform_system=="Windows"',
