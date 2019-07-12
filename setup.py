@@ -25,5 +25,8 @@ setup(
     install_requires=install_requires,
     url='https://github.com/AaronFoley/sn-sync',
     download_url='https://github.com/AaronFoley/sn-sync',
-    license='MCS DevOps',
+    license='MIT',
+    entry_points={
+        'console_scripts': ['sn-sync=snsync.cli:main'],
+    }
 )
